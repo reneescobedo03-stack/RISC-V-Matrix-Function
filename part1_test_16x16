@@ -1,0 +1,194 @@
+.text
+.globl main
+
+main:
+    # Matrix base address = 1024
+    addi s1, zero, 1024
+
+    # Output base address = 8192
+    lui s2, 2
+
+    # Matrix dimensions = 16 x 16
+    addi s3, zero, 16
+
+    # Initialize all 256 matrix elements to 1
+    addi t0, s1, 0
+    addi t1, zero, 256
+    addi t2, zero, 1
+
+initialize_matrix:
+    beq t1, zero, matrix_initialized
+    sw t2, 0(t0)
+    addi t0, t0, 4
+    addi t1, t1, -1
+    jal zero, initialize_matrix
+
+matrix_initialized:
+    # Call sum_columns(matrix, rows, columns, output)
+    addi a0, s1, 0
+    addi a1, s3, 0
+    addi a2, s3, 0
+    addi a3, s2, 0
+    jal ra, sum_columns
+
+    # Verify selected column sums: expected 16
+    lw t2, 0(s2)        # Column 0
+    lw t3, 28(s2)       # Column 7
+    lw t4, 60(s2)       # Column 15
+
+    # Overflow flag follows 16 column sums
+    lw t5, 64(s2)       # Expected 0
+
+    ebreak
+
+
+# ============================================================
+# sum_columns(a0, a1, a2, a3)
+# a0 = matrix base address
+# a1 = number of rows
+# a2 = number of columns
+# a3 = output base address
+#
+# Processes the matrix in row-major order.
+# Stores one sum per column, followed by an overflow flag.
+# ============================================================
+sum_columns:
+    # Save return address and saved registers
+    addi sp, sp, -40
+    sw ra, 36(sp)
+    sw s0, 32(sp)
+    sw s1, 28(sp)
+    sw s2, 24(sp)
+    sw s3, 20(sp)
+    sw s4, 16(sp)
+    sw s5, 12(sp)
+    sw s6, 8(sp)
+
+    addi s0, a0, 0
+    addi s1, a1, 0
+    addi s2, a2, 0
+    addi s3, a3, 0
+    addi s4, zero, 0
+    addi s6, zero, 0
+
+    # Initialize output column sums to zero
+    addi t1, s3, 0
+    addi t2, s2, 0
+
+initialize_sums:
+    beq t2, zero, sums_initialized
+    sw zero, 0(t1)
+    addi t1, t1, 4
+    addi t2, t2, -1
+    jal zero, initialize_sums
+
+sums_initialized:
+    # Begin at the first matrix element
+    addi t0, s0, 0
+
+row_loop:
+    bge s4, s1, rows_done
+
+    # Output pointer for the current column
+    addi t1, s3, 0
+    addi s5, s2, 0
+
+column_loop:
+    beq s5, zero, row_done
+
+    # Save loop state across do_add
+    addi sp, sp, -12
+    sw t0, 8(sp)
+    sw t1, 4(sp)
+    sw s5, 0(sp)
+
+    # Add current element to its column sum
+    lw a0, 0(t1)
+    lw a1, 0(t0)
+    jal ra, do_add
+
+    # Restore loop state
+    lw t0, 8(sp)
+    lw t1, 4(sp)
+    lw s5, 0(sp)
+    addi sp, sp, 12
+
+    # Store updated column sum
+    sw a0, 0(t1)
+
+    # Record any data-sum overflow
+    beq a2, zero, no_overflow
+    addi s6, zero, 1
+
+no_overflow:
+    # Advance to next matrix element and column
+    addi t0, t0, 4
+    addi t1, t1, 4
+    addi s5, s5, -1
+    jal zero, column_loop
+
+row_done:
+    addi s4, s4, 1
+    jal zero, row_loop
+
+rows_done:
+    # Store overflow flag after column sums
+    slli t0, s2, 2
+    addi a0, s3, 0
+    addi a1, t0, 0
+    jal ra, do_add
+    addi t1, a0, 0
+    sw s6, 0(t1)
+
+    # Restore saved registers
+    lw s6, 8(sp)
+    lw s5, 12(sp)
+    lw s4, 16(sp)
+    lw s3, 20(sp)
+    lw s2, 24(sp)
+    lw s1, 28(sp)
+    lw s0, 32(sp)
+    lw ra, 36(sp)
+    addi sp, sp, 40
+
+    jalr zero, 0(ra)
+
+
+# ============================================================
+# do_add(a0, a1)
+# Returns a0 = 32-bit sum, a2 = unsigned overflow flag.
+# Uses XOR, AND, and shifts instead of add/sub instructions.
+# ============================================================
+do_add:
+    addi sp, sp, -20
+    sw t0, 0(sp)
+    sw t1, 4(sp)
+    sw t2, 8(sp)
+    sw t3, 12(sp)
+    sw t6, 16(sp)
+
+    addi t6, a0, 0
+    addi t0, a0, 0
+    addi t1, a1, 0
+
+software_add_loop:
+    xor t2, t0, t1
+    and t3, t0, t1
+    slli t3, t3, 1
+
+    addi t0, t2, 0
+    addi t1, t3, 0
+
+    bne t1, zero, software_add_loop
+
+    addi a0, t0, 0
+    sltu a2, a0, t6
+
+    lw t0, 0(sp)
+    lw t1, 4(sp)
+    lw t2, 8(sp)
+    lw t3, 12(sp)
+    lw t6, 16(sp)
+    addi sp, sp, 20
+
+    jalr zero, 0(ra)
